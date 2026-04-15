@@ -1,4 +1,3 @@
-import requests
 import yt_dlp
 import os
 
@@ -12,23 +11,31 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
+# ------------------- سرچ -------------------
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
 
-    url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&q={query}&key={YOUTUBE_API_KEY}&maxResults=5&type=video"
-    data = requests.get(url).json()
+    ydl_opts = {
+        "quiet": True,
+        "extract_flat": True
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(f"ytsearch5:{query}", download=False)
 
     buttons = []
 
-    for item in data.get("items", []):
-        title = item["snippet"]["title"]
-        video_id = item["id"]["videoId"]
+    for entry in info["entries"]:
+        title = entry["title"]
+        video_id = entry["id"]
         video_url = f"https://www.youtube.com/watch?v={video_id}"
 
         buttons.append([
-            InlineKeyboardButton(title[:50], callback_data=f"video|{video_url}")
+            InlineKeyboardButton(
+                title[:50],
+                callback_data=f"video|{video_url}"
+            )
         ])
 
     await update.message.reply_text(
@@ -36,6 +43,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
+# ------------------- کیفیت‌ها -------------------
 def get_formats(url):
     ydl_opts = {"quiet": True}
 
@@ -50,8 +58,17 @@ def get_formats(url):
                 "quality": f"{f['height']}p"
             })
 
-    return formats[:6]
+    # حذف تکراری‌ها
+    seen = set()
+    unique = []
+    for f in formats:
+        if f["quality"] not in seen:
+            seen.add(f["quality"])
+            unique.append(f)
 
+    return unique[:6]
+
+# ------------------- دانلود -------------------
 def download_video(url, format_id):
     ydl_opts = {
         "format": format_id,
@@ -66,12 +83,14 @@ def download_video(url, format_id):
         if file.startswith("video."):
             return file
 
+# ------------------- دکمه‌ها -------------------
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     data = query.data
 
+    # انتخاب ویدیو
     if data.startswith("video|"):
         url = data.split("|")[1]
 
@@ -91,6 +110,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(buttons)
         )
 
+    # دانلود
     elif data.startswith("dl|"):
         _, format_id, url = data.split("|")
 
@@ -102,9 +122,11 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         os.remove(file_path)
 
+# ------------------- اجرا -------------------
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search))
 app.add_handler(CallbackQueryHandler(handle_buttons))
 
+print("Bot is running...")
 app.run_polling()
