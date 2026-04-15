@@ -6,14 +6,30 @@ from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     filters
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+# ------------------- استارت -------------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = [
+        [InlineKeyboardButton("🎬 یوتیوب‌گردی", callback_data="start_youtube")]
+    ]
+
+    await update.message.reply_text(
+        "سلام 👋\n\nبه ربات یوتیوب‌گردی خوش اومدی 😎\nروی دکمه زیر بزن تا شروع کنیم:",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
 # ------------------- سرچ -------------------
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # فقط وقتی کاربر وارد حالت یوتیوب شده
+    if not context.user_data.get("search_mode"):
+        return
+
     query = update.message.text
 
     ydl_opts = {
@@ -39,7 +55,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
 
     await update.message.reply_text(
-        "نتایج:",
+        "نتایج جستجو:",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
@@ -58,15 +74,7 @@ def get_formats(url):
                 "quality": f"{f['height']}p"
             })
 
-    # حذف تکراری‌ها
-    seen = set()
-    unique = []
-    for f in formats:
-        if f["quality"] not in seen:
-            seen.add(f["quality"])
-            unique.append(f)
-
-    return unique[:6]
+    return formats[:6]
 
 # ------------------- دانلود -------------------
 def download_video(url, format_id):
@@ -90,8 +98,16 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = query.data
 
+    # ورود به حالت یوتیوب
+    if data == "start_youtube":
+        context.user_data["search_mode"] = True
+
+        await query.message.reply_text(
+            "🔎 حالا اسم ویدیو یا هر چیزی میخوای جستجو کن:"
+        )
+
     # انتخاب ویدیو
-    if data.startswith("video|"):
+    elif data.startswith("video|"):
         url = data.split("|")[1]
 
         formats = get_formats(url)
@@ -114,7 +130,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("dl|"):
         _, format_id, url = data.split("|")
 
-        await query.message.reply_text("در حال دانلود...")
+        await query.message.reply_text("⏳ در حال دانلود...")
 
         file_path = download_video(url, format_id)
 
@@ -125,6 +141,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------- اجرا -------------------
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search))
 app.add_handler(CallbackQueryHandler(handle_buttons))
 
