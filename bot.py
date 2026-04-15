@@ -1,149 +1,138 @@
-import yt_dlp
 import os
+import yt_dlp
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder,
-    MessageHandler,
-    CallbackQueryHandler,
+    Application,
     CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
     ContextTypes,
     filters
 )
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.environ.get("BOT_TOKEN")
 
-# ------------------- استارت -------------------
+
+# ───────── START ─────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    buttons = [
-        [InlineKeyboardButton("🎬 یوتیوب‌گردی", callback_data="start_youtube")]
+    keyboard = [
+        [InlineKeyboardButton("🎬 یوتیوب گردی", callback_data="youtube")]
     ]
 
     await update.message.reply_text(
-        "سلام 👋\n\nبه ربات یوتیوب‌گردی خوش اومدی 😎\nروی دکمه زیر بزن تا شروع کنیم:",
-        reply_markup=InlineKeyboardMarkup(buttons)
+        "👋 سلام!\nلینک یوتیوب رو بفرست تا کیفیت انتخاب کنی.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ------------------- سرچ -------------------
-async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # فقط وقتی کاربر وارد حالت یوتیوب شده
-    if not context.user_data.get("search_mode"):
-        return
 
-    query = update.message.text
+# ───────── BUTTON ─────────
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
+    if query.data == "youtube":
+        await query.message.reply_text("📩 لینک یوتیوب رو بفرست:")
+
+
+# ───────── GET VIDEO INFO (NO DOWNLOAD) ─────────
+def get_formats(url):
     ydl_opts = {
         "quiet": True,
-        "extract_flat": True
+        "skip_download": True
     }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(f"ytsearch5:{query}", download=False)
-
-    buttons = []
-
-    for entry in info["entries"]:
-        title = entry["title"]
-        video_id = entry["id"]
-        video_url = f"https://www.youtube.com/watch?v={video_id}"
-
-        buttons.append([
-            InlineKeyboardButton(
-                title[:50],
-                callback_data=f"video|{video_url}"
-            )
-        ])
-
-    await update.message.reply_text(
-        "نتایج جستجو:",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
-
-# ------------------- کیفیت‌ها -------------------
-def get_formats(url):
-    ydl_opts = {"quiet": True}
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
-    formats = []
-    for f in info["formats"]:
-        if f.get("height") and f.get("ext") == "mp4":
-            formats.append({
-                "id": f["format_id"],
-                "quality": f"{f['height']}p"
-            })
+        formats = []
+        for f in info["formats"]:
+            if f.get("height"):
+                if f["height"] in [360, 480, 720, 1080]:
+                    formats.append((f["height"], f["format_id"]))
 
-    return formats[:6]
+        # حذف تکراری‌ها
+        seen = {}
+        for h, fid in formats:
+            seen[h] = fid
 
-# ------------------- دانلود -------------------
+        return seen
+
+
+# ───────── DOWNLOAD ─────────
 def download_video(url, format_id):
     ydl_opts = {
         "format": format_id,
         "outtmpl": "video.%(ext)s",
-        "quiet": True
+        "noplaylist": True,
+        "quiet": True,
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        info = ydl.extract_info(url, download=True)
+        return ydl.prepare_filename(info)
 
-    for file in os.listdir():
-        if file.startswith("video."):
-            return file
 
-# ------------------- دکمه‌ها -------------------
-async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ───────── MESSAGE (URL RECEIVER) ─────────
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text
+
+    if "youtube.com" not in url and "youtu.be" not in url:
+        await update.message.reply_text("❌ فقط لینک یوتیوب بفرست.")
+        return
+
+    context.user_data["url"] = url
+
+    formats = get_formats(url)
+
+    keyboard = [
+        [InlineKeyboardButton(f"🎬 {h}p", callback_data=f"q_{fid}")]
+        for h, fid in formats.items()
+    ]
+
+    await update.message.reply_text(
+        "📊 کیفیت رو انتخاب کن:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+# ───────── QUALITY SELECT ─────────
+async def quality_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    data = query.data
+    format_id = query.data.replace("q_", "")
+    url = context.user_data.get("url")
 
-    # ورود به حالت یوتیوب
-    if data == "start_youtube":
-        context.user_data["search_mode"] = True
+    if not url:
+        await query.message.reply_text("❌ لینک پیدا نشد دوباره بفرست.")
+        return
 
-        await query.message.reply_text(
-            "🔎 حالا اسم ویدیو یا هر چیزی میخوای جستجو کن:"
-        )
+    await query.message.reply_text("⏳ در حال دانلود...")
 
-    # انتخاب ویدیو
-    elif data.startswith("video|"):
-        url = data.split("|")[1]
-
-        formats = get_formats(url)
-
-        buttons = []
-        for f in formats:
-            buttons.append([
-                InlineKeyboardButton(
-                    f["quality"],
-                    callback_data=f"dl|{f['id']}|{url}"
-                )
-            ])
-
-        await query.message.reply_text(
-            "کیفیت رو انتخاب کن:",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
-
-    # دانلود
-    elif data.startswith("dl|"):
-        _, format_id, url = data.split("|")
-
-        await query.message.reply_text("⏳ در حال دانلود...")
-
+    try:
         file_path = download_video(url, format_id)
 
         await query.message.reply_video(video=open(file_path, "rb"))
 
         os.remove(file_path)
 
-# ------------------- اجرا -------------------
-app = ApplicationBuilder().token(BOT_TOKEN).build()
+    except Exception as e:
+        await query.message.reply_text(f"❌ خطا:\n{e}")
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search))
-app.add_handler(CallbackQueryHandler(handle_buttons))
 
-print("Bot is running...")
-app.run_polling()
+# ───────── MAIN ─────────
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button, pattern="youtube"))
+    app.add_handler(CallbackQueryHandler(quality_handler, pattern="q_"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    print("Bot is running...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
